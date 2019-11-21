@@ -344,6 +344,7 @@ func uint64ToBytes(n uint64) []byte {
 }
 
 func uint64ToString(n uint64) []byte {
+	//0x30,字符开始的地方
 	var a [20]byte
 	i := 20
 

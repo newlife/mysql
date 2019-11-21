@@ -24,6 +24,10 @@ import (
 // http://dev.mysql.com/doc/internals/en/client-server-protocol.html
 
 // Read packet to buffer 'data'
+//读取一个packet,这个packet不是某个tcp数据包。一个tcp数据包中可能含有多个packet。
+//执行查询是返回客户端的每一行都是一个packet
+//这个长度pktLen，描述当前这个packet的大小，用3个字节表示，第三个字节表示最高位
+//3*8=24,单个packet最大是2**24-1，
 func (mc *mysqlConn) readPacket() ([]byte, error) {
 	var prevData []byte
 	for {
@@ -64,7 +68,7 @@ func (mc *mysqlConn) readPacket() ([]byte, error) {
 		}
 
 		// read packet body [pktLen bytes]
-		data, err = mc.buf.readNext(pktLen)
+		data, err = mc.buf.readNext(pktLen) //所以data不包含packet length和sequence number
 		if err != nil {
 			if cerr := mc.canceled.Value(); cerr != nil {
 				return nil, cerr
@@ -132,6 +136,7 @@ func (mc *mysqlConn) writePacket(data []byte) error {
 			data[1] = 0xff
 			data[2] = 0xff
 			size = maxPacketSize
+			//比maxPacketSize，全是1
 		} else {
 			data[0] = byte(pktLen)
 			data[1] = byte(pktLen >> 8)
@@ -139,6 +144,7 @@ func (mc *mysqlConn) writePacket(data []byte) error {
 			size = pktLen
 		}
 		data[3] = mc.sequence
+		//这里实现了前三个字节是报文的长度，第四个字节是序号
 
 		// Write packet
 		if mc.writeTimeout > 0 {
@@ -156,7 +162,7 @@ func (mc *mysqlConn) writePacket(data []byte) error {
 			pktLen -= size
 			data = data[size:]
 			continue
-		}
+		} //这就是写数据了，分别处理一般长度和大于maxPacketSize的两种情况
 
 		// Handle error
 		if err == nil { // n != len(data)
@@ -437,10 +443,12 @@ func (mc *mysqlConn) writeCommandPacket(command byte) error {
 
 func (mc *mysqlConn) writeCommandPacketStr(command byte, arg string) error {
 	// Reset Packet Sequence
+	//执行一个命令，比如comQuery(0x03)
+	//arg是具体命令，比如"show databases"
 	mc.sequence = 0
 
-	pktLen := 1 + len(arg)
-	data, err := mc.buf.takeBuffer(pktLen + 4)
+	pktLen := 1 + len(arg)                     //1是给command留的
+	data, err := mc.buf.takeBuffer(pktLen + 4) //4是给包长度和序列号留的
 	if err != nil {
 		// cannot take the buffer. Something must be wrong with the connection
 		errLog.Print(err)
@@ -457,6 +465,7 @@ func (mc *mysqlConn) writeCommandPacketStr(command byte, arg string) error {
 	return mc.writePacket(data)
 }
 
+//后面的arg好像是stmt的id，看来还是上面那个用的更多一些
 func (mc *mysqlConn) writeCommandPacketUint32(command byte, arg uint32) error {
 	// Reset Packet Sequence
 	mc.sequence = 0
@@ -607,6 +616,7 @@ func readStatus(b []byte) statusFlag {
 }
 
 // Ok Packet
+// 比如登陆成功
 // http://dev.mysql.com/doc/internals/en/generic-response-packets.html#packet-OK_Packet
 func (mc *mysqlConn) handleOkPacket(data []byte) error {
 	var n, m int
@@ -905,6 +915,7 @@ func (stmt *mysqlStmt) writeCommandLongData(paramID int, arg []byte) error {
 
 // Execute Prepared Statement
 // http://dev.mysql.com/doc/internals/en/com-stmt-execute.html
+// 长达200多行的代码
 func (stmt *mysqlStmt) writeExecutePacket(args []driver.Value) error {
 	if len(args) != stmt.paramCount {
 		return fmt.Errorf(
@@ -1163,6 +1174,7 @@ func (mc *mysqlConn) discardResults() error {
 }
 
 // http://dev.mysql.com/doc/internals/en/binary-protocol-resultset-row.html
+// 长达170行的函数
 func (rows *binaryRows) readRow(dest []driver.Value) error {
 	data, err := rows.mc.readPacket()
 	if err != nil {
